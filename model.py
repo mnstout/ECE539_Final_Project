@@ -1,4 +1,5 @@
 from ctypes.wintypes import RGB
+from sqlite3 import Row
 from turtle import width
 from matplotlib.colors import rgb2hex
 from matplotlib.markers import MarkerStyle
@@ -76,6 +77,21 @@ def plot(df, name):
 
     plt.show()
 
+def prepInput(Xs):
+    xf = np.zeros(shape=(Xs.shape[0],60,120,Xs.shape[2]))
+    row = -1
+    for i in xf:
+        row += 1
+        set = -1
+        for j in i:
+            set += 1
+            j[:,:] = Xs[row,set:set+120,:]
+                    
+    xf = xf.reshape(xf.shape[0],xf.shape[1],-1)
+    xf = np.asarray(xf).astype('float32')
+    return xf
+    
+
 # Return model and scalers
 def getModel(x,y):
     
@@ -86,16 +102,21 @@ def getModel(x,y):
         Xs = x[:,:,0:6]
         Ys = y[:,:,3]
         
-        Xs = np.asarray(Xs).astype('float32')
+        xf = prepInput(Xs)
+        
+        print(xf.shape)
+        print(Ys.shape)      
+        
         Ys = np.asarray(Ys).astype('float32')
     
         model = Sequential()
-        model.add(LSTM(160, input_shape=(Xs.shape[1], Xs.shape[2])))
+        model.add(LSTM(160, return_sequences=True, input_shape=(xf.shape[1],xf.shape[2])))
+        model.add(LSTM(80, return_sequences=False))
         model.add(Dense(40))
-        model.add(Dense(20))
+        model.add(Dense(1))
         model.compile(loss='mae', optimizer='adam')
     
-        history = model.fit(Xs,Ys, epochs = 100, batch_size = 15)
+        history = model.fit(xf,Ys, epochs = 100, batch_size = 15)
         plt.plot(history.history['loss'], label='train')
         plt.legend()
         plt.show()
@@ -104,6 +125,19 @@ def getModel(x,y):
         model.save('model')
     
     return model
+
+def prepPred(x):
+    xf = np.zeros(shape=(60,60,120,6))
+    
+    row = -1
+    for a in xf:
+        row += 1
+        for b in list(range(60)):
+            a[b,:,:] = x[row:row+120,:]
+    
+    xf = xf.reshape(60,60,720)
+    xf = np.asarray(xf).astype('float32')
+    return xf
 
 # Import Data
 data = pd.read_csv (r'C:\Users\Nate\Desktop\CS539\dataset.csv', parse_dates=True)
@@ -117,15 +151,6 @@ with open("used_symbols.txt") as file:
 ## Plot Random Data
 # plot(df, names[random.randint(0,len(names))])
 
-# Ensure all the names and symbols are linked properly by
-# deleting all elements in names that aren't in the dataset
-rElement = []
-for name in names:
-    if name not in df['Symbol'].values:
-        rElement.append(name)
-for r in rElement:
-    names.remove(r)
-
 ## Data prep for model
 # Open,High,Low,Close,Adj Close,Volume,Symbol,date
 x = []
@@ -133,17 +158,17 @@ y = []
 
 # Scale
 scaler = MinMaxScaler(feature_range=(0,1))
+df_orig = df.copy()
 df[["Open","High","Low","Close","Adj Close","Volume"]] = scaler.fit_transform(df[["Open","High","Low","Close","Adj Close","Volume"]])
-
 
 for i in names:
     tmp = df[df["Symbol"] == i]
-    if (tmp.shape[0] >= 60):
-        x.append(tmp[0:40])
-        y.append(tmp[40:60])
+    if (tmp.shape[0] >= 240):
+        x.append(tmp[0:180])
+        y.append(tmp[180:240])
 
-x = np.reshape(np.array(x),(2110,40,8))
-y = np.reshape(np.array(y),(2110,20,8))
+x = np.reshape(np.array(x),(1301,180,8))
+y = np.reshape(np.array(y),(1301,60,8))
 
 # Split train/test set, not randomly selected
 xTrain = x[0:round((x.shape[0] * .75))]
@@ -155,32 +180,19 @@ yTest = y[yTrain.shape[0]::]
 model = getModel(xTrain,yTrain)
 
 
+xPred = prepPred(xTest[4,:,0:6])
+yPred = model.predict(xPred)
 
-
-xTest = xTest[:,:,0:6]
-xTest = np.asarray(xTest).astype('float32')
-pred = model.predict(xTest)
-
-pred = pred.reshape((1,pred.shape[0]*pred.shape[1]))
-zero = np.zeros((pred.shape[1],6))
-zero[:,3] = pred
-pred = scaler.inverse_transform(zero)
-pred = pred[:,3].reshape((int(pred.shape[0]/20),20))
-
-for i in yTest:
-    i[:,0:6] = scaler.inverse_transform(i[:,0:6])
-
+print(xTest.shape)
+print(xPred.shape)
+print(yPred.shape)
 
 yTest = yTest[:,:,3]
-
-pd.DataFrame(pred).to_csv('pred.csv',index=False)
-pd.DataFrame(yTest).to_csv('real.csv',index=False)
-
 plt.figure(figsize=(16,6))
 plt.title('Model')
 plt.xlabel('Date', fontsize=18)
 plt.ylabel('Close Price USD ($)', fontsize=18)
-plt.plot(yTest[3])
-plt.plot(pred[3])
+plt.plot(yTest[4])
+plt.plot(yPred)
 plt.legend(['Train', 'Val', 'Predictions'], loc='lower right')
 plt.show()
