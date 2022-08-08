@@ -7,6 +7,15 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import mpl_toolkits.mplot3d 
 import random
+from tensorflow import keras
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+import joblib
+import os.path
+import tensorflow_text as text
 
 # Plot function for value in table
 # name is the code for any company in the table
@@ -67,6 +76,35 @@ def plot(df, name):
 
     plt.show()
 
+# Return model and scalers
+def getModel(x,y):
+    
+    if os.path.exists('model'):
+        model = keras.models.load_model('model')
+        
+    else:
+        Xs = x[:,:,0:6]
+        Ys = y[:,:,3]
+        
+        Xs = np.asarray(Xs).astype('float32')
+        Ys = np.asarray(Ys).astype('float32')
+    
+        model = Sequential()
+        model.add(LSTM(160, input_shape=(Xs.shape[1], Xs.shape[2])))
+        model.add(Dense(40))
+        model.add(Dense(20))
+        model.compile(loss='mae', optimizer='adam')
+    
+        history = model.fit(Xs,Ys, epochs = 100, batch_size = 15)
+        plt.plot(history.history['loss'], label='train')
+        plt.legend()
+        plt.show()
+        
+        # save the model
+        model.save('model')
+    
+    return model
+
 # Import Data
 data = pd.read_csv (r'C:\Users\Nate\Desktop\CS539\dataset.csv', parse_dates=True)
 df = pd.DataFrame(data, columns= ['Open','High','Low','Close','Adj Close','Volume','Symbol','date'])
@@ -76,5 +114,73 @@ df.date = pd.to_datetime(df['date'], format='%Y-%m-%d')
 with open("used_symbols.txt") as file:
     names = file.read().split('\n')
 
-# Plot
-plot(df, names[random.randint(0,len(names))])
+## Plot Random Data
+# plot(df, names[random.randint(0,len(names))])
+
+# Ensure all the names and symbols are linked properly by
+# deleting all elements in names that aren't in the dataset
+rElement = []
+for name in names:
+    if name not in df['Symbol'].values:
+        rElement.append(name)
+for r in rElement:
+    names.remove(r)
+
+## Data prep for model
+# Open,High,Low,Close,Adj Close,Volume,Symbol,date
+x = []
+y = []
+
+# Scale
+scaler = MinMaxScaler(feature_range=(0,1))
+df[["Open","High","Low","Close","Adj Close","Volume"]] = scaler.fit_transform(df[["Open","High","Low","Close","Adj Close","Volume"]])
+
+
+for i in names:
+    tmp = df[df["Symbol"] == i]
+    if (tmp.shape[0] >= 60):
+        x.append(tmp[0:40])
+        y.append(tmp[40:60])
+
+x = np.reshape(np.array(x),(2110,40,8))
+y = np.reshape(np.array(y),(2110,20,8))
+
+# Split train/test set, not randomly selected
+xTrain = x[0:round((x.shape[0] * .75))]
+xTest = x[xTrain.shape[0]::]
+yTrain = y[0:round((y.shape[0] * .75))]
+yTest = y[yTrain.shape[0]::]
+
+# Get Trained Model
+model = getModel(xTrain,yTrain)
+
+
+
+
+xTest = xTest[:,:,0:6]
+xTest = np.asarray(xTest).astype('float32')
+pred = model.predict(xTest)
+
+pred = pred.reshape((1,pred.shape[0]*pred.shape[1]))
+zero = np.zeros((pred.shape[1],6))
+zero[:,3] = pred
+pred = scaler.inverse_transform(zero)
+pred = pred[:,3].reshape((int(pred.shape[0]/20),20))
+
+for i in yTest:
+    i[:,0:6] = scaler.inverse_transform(i[:,0:6])
+
+
+yTest = yTest[:,:,3]
+
+pd.DataFrame(pred).to_csv('pred.csv',index=False)
+pd.DataFrame(yTest).to_csv('real.csv',index=False)
+
+plt.figure(figsize=(16,6))
+plt.title('Model')
+plt.xlabel('Date', fontsize=18)
+plt.ylabel('Close Price USD ($)', fontsize=18)
+plt.plot(yTest[3])
+plt.plot(pred[3])
+plt.legend(['Train', 'Val', 'Predictions'], loc='lower right')
+plt.show()
